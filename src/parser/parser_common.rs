@@ -28,6 +28,10 @@ pub const END_KEYWORD: &str = "end";
 
 // Statement keyword constants
 pub const IF_KEYWORD: &str = "if";
+// ADD PATTERN MATCHING: constantes das palavras-chave do pattern matching.
+pub const MATCH_KEYWORD: &str = "match";
+pub const OF_KEYWORD: &str = "of";
+pub const CASE_KEYWORD: &str = "case";
 pub const ELIF_KEYWORD: &str = "elif";
 pub const ELSE_KEYWORD: &str = "else";
 pub const WHILE_KEYWORD: &str = "while";

@@ -224,6 +224,11 @@ pub enum Statement {
         branches: Vec<(Box<Expression>, Box<Statement>)>,
         else_branch: Option<Box<Statement>>,
     },
+    // ADD PATTERN MATCHING: nó da AST para uma expressão match e seus casos.
+    Match {
+        value: Box<Expression>,
+        cases: Vec<(Box<Expression>, Box<Statement>)>,
+    },
     While(Box<Expression>, Box<Statement>),
     For(Name, Box<Expression>, Box<Statement>),
     Break,

@@ -1,5 +1,9 @@
 pub const KEYWORDS: &[&str] = &[
     "if",
+    // ADD PATTERN MATCHING: palavras reservadas da sintaxe match/of/case.
+    "match",
+    "of",
+    "case",
     "in",
     "else",
     "elif",
