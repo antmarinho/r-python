@@ -152,6 +152,30 @@ impl ToDoc for Statement {
                     text("")
                 }
             }
+            // ADD PATTERN MATCHING: formata o nó Match gerado pelo parser.
+            Statement::Match { value, cases } => {
+                let case_docs: Vec<Rc<Doc>> = cases
+                    .iter()
+                    .map(|(pattern, body)| match body.as_ref() {
+                        Statement::Block(stmts) => concat(
+                            text("case "),
+                            concat(pattern.to_doc(), inner_block_to_doc(stmts)),
+                        ),
+                        _ => concat(text("case "), concat(pattern.to_doc(), body.to_doc())),
+                    })
+                    .collect();
+                concat(
+                    text("match "),
+                    concat(
+                        value.to_doc(),
+                        concat(
+                            text(" of"),
+                            concat(nest(4, concat(hardline(), join(hardline(), case_docs))),
+                                   concat(hardline(), text("\nend"))),
+                        ),
+                    ),
+                )
+            }
             // Formata laços `while`.
             Statement::While(cond, body) => concat(
                 text("while "),

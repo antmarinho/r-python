@@ -14,8 +14,8 @@ use crate::parser::parser_common::{
     identifier, keyword, ASSERTEQ_KEYWORD, ASSERTFALSE_KEYWORD, ASSERTNEQ_KEYWORD,
     ASSERTTRUE_KEYWORD, ASSERT_KEYWORD, BREAK_KEYWORD, COLON_CHAR, COMMA_CHAR, CONTINUE_KEYWORD,
     DEF_KEYWORD, ELIF_KEYWORD, ELSE_KEYWORD, END_KEYWORD, EQUALS_CHAR, FOR_KEYWORD, FUNCTION_ARROW,
-    IF_KEYWORD, IN_KEYWORD, LEFT_PAREN, RET_KEYWORD, RIGHT_PAREN, SEMICOLON_CHAR, TEST_KEYWORD,
-    VAL_KEYWORD, VAR_KEYWORD, WHILE_KEYWORD,
+    CASE_KEYWORD, IF_KEYWORD, IN_KEYWORD, LEFT_PAREN, MATCH_KEYWORD, OF_KEYWORD, RET_KEYWORD,
+    RIGHT_PAREN, SEMICOLON_CHAR, TEST_KEYWORD, VAL_KEYWORD, VAR_KEYWORD, WHILE_KEYWORD,
 };
 use crate::parser::parser_expr::parse_expression;
 use crate::parser::parser_type::parse_type;
@@ -27,6 +27,8 @@ pub fn parse_statement(input: &str) -> IResult<&str, Statement> {
         parse_val_declaration_statement,
         parse_if_chain_statement,
         parse_if_else_statement,
+        // ADD PATTERN MATCHING: reconhece statements iniciados por match.
+        parse_match_statement,
         parse_while_statement,
         parse_for_statement,
         parse_assert_statement,
@@ -167,6 +169,61 @@ pub fn parse_if_chain_statement(input: &str) -> IResult<&str, Statement> {
             else_branch: else_branch.map(Box::new),
         },
     ))
+}
+
+// ADD PATTERN MATCHING: parser de `match <expression> of case ... end`.
+/// Parses: `match <expression> of case <pattern>: <body> ... end`.
+/// Each case body stops before the next `case` or the final `end`.
+pub fn parse_match_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = keyword(MATCH_KEYWORD)(input)?;
+    let (input, value) = preceded(multispace0, parse_expression)(input)?;
+    let (mut input, _) = keyword(OF_KEYWORD)(input)?;
+    let mut cases = Vec::new();
+
+    loop {
+        let (after_case, _) = keyword(CASE_KEYWORD)(input)?;
+        let (after_pattern, pattern) = preceded(multispace0, parse_expression)(after_case)?;
+        let (after_body, body) = parse_inner_match_case_block(after_pattern)?;
+        cases.push((Box::new(pattern), Box::new(body)));
+        input = after_body;
+
+        if keyword(CASE_KEYWORD)(input).is_ok() {
+            continue;
+        }
+
+        let (input, _) = preceded(multispace0, keyword(END_KEYWORD))(input)?;
+        return Ok((
+            input,
+            Statement::Match {
+                value: Box::new(value),
+                cases,
+            },
+        ));
+    }
+}
+
+// ADD PATTERN MATCHING: parser do bloco interno de cada cláusula case.
+fn parse_inner_match_case_block(input: &str) -> IResult<&str, Statement> {
+    map(
+        tuple((
+            char::<&str, Error<&str>>(COLON_CHAR),
+            multispace0,
+            separated_list0(
+                delimited(
+                    multispace0,
+                    char::<&str, Error<&str>>(SEMICOLON_CHAR),
+                    multispace0,
+                ),
+                parse_statement,
+            ),
+            opt(preceded(
+                multispace0,
+                char::<&str, Error<&str>>(SEMICOLON_CHAR),
+            )),
+            multispace0,
+        )),
+        |(_, _, stmts, _, _)| Statement::Block(stmts),
+    )(input)
 }
 
 fn parse_while_statement(input: &str) -> IResult<&str, Statement> {
