@@ -24,6 +24,8 @@ pub fn check_stmt(
             branches,
             else_branch,
         } => check_if_chain_stmt(branches, else_branch, env),
+        // ADD PATTERN MATCHING: tratamento provisório até implementar a semântica.
+        Statement::Match { .. } => Err("Pattern matching is not implemented in the type checker yet".to_string()),
         Statement::While(cond, stmt) => check_while_stmt(cond, stmt, env),
         Statement::For(var, expr, stmt) => check_for_stmt(var, expr, stmt, env),
         Statement::FuncDef(function) => check_func_def_stmt(function, env),
