@@ -234,33 +234,21 @@ mod statement_tests {
         assert_eq!(result, expected);
     }
 
-    // ADD PATTERN MATCHING: valida o parsing de múltiplas cláusulas case.
+    // ADD PATTERN MATCHING: valida os formatos de Pattern suportados pelo parser.
     #[test]
-    fn test_match_statement() {
-        let input = "match value of case 1: result = 10; case 2: result = 20; end";
-        let expected = Statement::Match {
-            value: Box::new(Expression::Var("value".to_string())),
-            cases: vec![
-                (
-                    Box::new(Expression::CInt(1)),
-                    Box::new(Statement::Block(vec![Statement::Assignment(
-                        "result".to_string(),
-                        Box::new(Expression::CInt(10)),
-                    )])),
-                ),
-                (
-                    Box::new(Expression::CInt(2)),
-                    Box::new(Statement::Block(vec![Statement::Assignment(
-                        "result".to_string(),
-                        Box::new(Expression::CInt(20)),
-                    )])),
-                ),
-            ],
-        };
-
+    fn test_match_patterns() {
+        let input = "match value of case 1: result = 10; case (x, _): result = x; case [a, b]: result = a; case Circle(radius): result = radius; end";
         let (rest, result) = parse_statement(input).unwrap();
         assert_eq!(rest, "");
-        assert_eq!(result, expected);
+
+        assert!(matches!(
+            result,
+            Statement::Match { cases, .. }
+                if matches!(cases[0].0, Pattern::Literal(Expression::CInt(1)))
+                    && matches!(cases[1].0, Pattern::Tuple(_))
+                    && matches!(cases[2].0, Pattern::List(_))
+                    && matches!(cases[3].0, Pattern::Constructor(ref name, _) if name == "Circle")
+        ));
     }
 
     #[test]

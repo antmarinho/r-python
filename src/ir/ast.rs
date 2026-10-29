@@ -213,6 +213,17 @@ pub enum Expression {
     Constructor(Name, Vec<Box<Expression>>),
 }
 
+// ADD PATTERN MATCHING: padrões independentes de expressões comuns.
+#[derive(Debug, PartialEq, Clone)]
+pub enum Pattern {
+    Literal(Expression),
+    Variable(Name),
+    Wildcard,
+    Tuple(Vec<Pattern>),
+    List(Vec<Pattern>),
+    Constructor(Name, Vec<Pattern>),
+}
+
 // Represents statements in the AST
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
@@ -227,7 +238,7 @@ pub enum Statement {
     // ADD PATTERN MATCHING: nó da AST para uma expressão match e seus casos.
     Match {
         value: Box<Expression>,
-        cases: Vec<(Box<Expression>, Box<Statement>)>,
+        cases: Vec<(Pattern, Box<Statement>)>,
     },
     While(Box<Expression>, Box<Statement>),
     For(Name, Box<Expression>, Box<Statement>),

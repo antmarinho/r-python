@@ -9,7 +9,7 @@ use nom::{
     Err, IResult,
 };
 
-use crate::ir::ast::{Expression, FormalArgument, Function, Statement, Type};
+use crate::ir::ast::{Expression, FormalArgument, Function, Pattern, Statement, Type};
 use crate::parser::parser_common::{
     identifier, keyword, ASSERTEQ_KEYWORD, ASSERTFALSE_KEYWORD, ASSERTNEQ_KEYWORD,
     ASSERTTRUE_KEYWORD, ASSERT_KEYWORD, BREAK_KEYWORD, COLON_CHAR, COMMA_CHAR, CONTINUE_KEYWORD,
@@ -171,9 +171,7 @@ pub fn parse_if_chain_statement(input: &str) -> IResult<&str, Statement> {
     ))
 }
 
-// ADD PATTERN MATCHING: parser de `match <expression> of case ... end`.
-/// Parses: `match <expression> of case <pattern>: <body> ... end`.
-/// Each case body stops before the next `case` or the final `end`.
+// ADD PATTERN MATCHING: parser de `match <expressão> of case ... end`.
 pub fn parse_match_statement(input: &str) -> IResult<&str, Statement> {
     let (input, _) = keyword(MATCH_KEYWORD)(input)?;
     let (input, value) = preceded(multispace0, parse_expression)(input)?;
@@ -182,9 +180,12 @@ pub fn parse_match_statement(input: &str) -> IResult<&str, Statement> {
 
     loop {
         let (after_case, _) = keyword(CASE_KEYWORD)(input)?;
-        let (after_pattern, pattern) = preceded(multispace0, parse_expression)(after_case)?;
+        let (after_pattern, pattern_expr) = preceded(multispace0, parse_expression)(after_case)?;
+        let pattern = expression_to_pattern(pattern_expr).map_err(|_| {
+            nom::Err::Error(Error::new(after_case, ErrorKind::Verify))
+        })?;
         let (after_body, body) = parse_inner_match_case_block(after_pattern)?;
-        cases.push((Box::new(pattern), Box::new(body)));
+        cases.push((pattern, Box::new(body)));
         input = after_body;
 
         if keyword(CASE_KEYWORD)(input).is_ok() {
@@ -199,6 +200,48 @@ pub fn parse_match_statement(input: &str) -> IResult<&str, Statement> {
                 cases,
             },
         ));
+    }
+}
+
+// ADD PATTERN MATCHING: converte a expressão parseada na representação de Pattern.
+fn expression_to_pattern(expr: Expression) -> Result<Pattern, ()> {
+    match expr {
+        Expression::CTrue
+        | Expression::CFalse
+        | Expression::CInt(_)
+        | Expression::CReal(_)
+        | Expression::CString(_)
+        | Expression::CVoid => Ok(Pattern::Literal(expr)),
+        Expression::Var(name) if name == "_" => Ok(Pattern::Wildcard),
+        Expression::Var(name) => Ok(Pattern::Variable(name)),
+        Expression::Tuple(elements) => elements
+            .into_iter()
+            .map(expression_to_pattern)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Pattern::Tuple),
+        Expression::ListValue(elements) => elements
+            .into_iter()
+            .map(expression_to_pattern)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Pattern::List),
+        Expression::FuncCall(name, args) => args
+            .into_iter()
+            .map(expression_to_pattern)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|args| Pattern::Constructor(name, args)),
+        Expression::Constructor(name, args) => args
+            .into_iter()
+            .map(|arg| expression_to_pattern(*arg))
+            .collect::<Result<Vec<_>, _>>()
+            .map(|args| Pattern::Constructor(name, args)),
+        Expression::CJust(expr) => expression_to_pattern(*expr)
+            .map(|arg| Pattern::Constructor("Just".to_string(), vec![arg])),
+        Expression::COk(expr) => expression_to_pattern(*expr)
+            .map(|arg| Pattern::Constructor("Ok".to_string(), vec![arg])),
+        Expression::CErr(expr) => expression_to_pattern(*expr)
+            .map(|arg| Pattern::Constructor("Err".to_string(), vec![arg])),
+        Expression::CNothing => Ok(Pattern::Constructor("Nothing".to_string(), vec![])),
+        _ => Err(()),
     }
 }
 
