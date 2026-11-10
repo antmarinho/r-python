@@ -1,7 +1,7 @@
 // src/pretty_print/pretty_expressions.rs
 
 use super::pretty_print::{concat, group, line, nest, punctuate, space, text, Doc, ToDoc};
-use crate::ir::ast::Expression;
+use crate::ir::ast::{Expression, Pattern};
 use std::rc::Rc;
 
 // --- Níveis de Precedência dos Operadores ---
@@ -187,6 +187,40 @@ impl Expression {
                     text("("),
                     concat(nest(4, concat(line(), joined)), concat(line(), text(")"))),
                 ))
+            }
+        }
+    }
+}
+
+// ================================================================
+// ALTERAÇÃO RELACIONADA AO TYPE CHECKER DO MATCH
+// O type checker usa a AST com Pattern/Match. Este ToDoc permite
+// imprimir esses nós sem quebrar a compilação do projeto.
+// ================================================================
+impl ToDoc for Pattern {
+    fn to_doc(&self) -> Rc<Doc> {
+        match self {
+            Pattern::Literal(expr) => expr.to_doc(),
+            Pattern::Variable(name) => text(name.clone()),
+            Pattern::Wildcard => text("_"),
+            Pattern::Tuple(patterns) => {
+                let docs: Vec<Rc<Doc>> = patterns.iter().map(|pattern| pattern.to_doc()).collect();
+                concat(text("("), concat(punctuate(concat(text(","), space()), &docs), text(")")))
+            }
+            Pattern::List(patterns) => {
+                let docs: Vec<Rc<Doc>> = patterns.iter().map(|pattern| pattern.to_doc()).collect();
+                concat(text("["), concat(punctuate(concat(text(","), space()), &docs), text("]")))
+            }
+            Pattern::Constructor(name, args) => {
+                if args.is_empty() {
+                    text(name.clone())
+                } else {
+                    let docs: Vec<Rc<Doc>> = args.iter().map(|pattern| pattern.to_doc()).collect();
+                    concat(
+                        text(name.clone()),
+                        concat(text("("), concat(punctuate(concat(text(","), space()), &docs), text(")"))),
+                    )
+                }
             }
         }
     }

@@ -152,7 +152,11 @@ impl ToDoc for Statement {
                     text("")
                 }
             }
-            // ADD PATTERN MATCHING: formata o nó Match gerado pelo parser.
+            // ================================================================
+            // ALTERAÇÃO RELACIONADA AO TYPE CHECKER DO MATCH
+            // Trata a variante Statement::Match adicionada à AST para que
+            // todos os matches internos do Rust continuem completos.
+            // ================================================================
             Statement::Match { value, cases } => {
                 let case_docs: Vec<Rc<Doc>> = cases
                     .iter()
@@ -170,8 +174,10 @@ impl ToDoc for Statement {
                         value.to_doc(),
                         concat(
                             text(" of"),
-                            concat(nest(4, concat(hardline(), join(hardline(), case_docs))),
-                                   concat(hardline(), text("\nend"))),
+                            concat(
+                                nest(4, concat(hardline(), join(hardline(), case_docs))),
+                                concat(hardline(), text("end")),
+                            ),
                         ),
                     ),
                 )

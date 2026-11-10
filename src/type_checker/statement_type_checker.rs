@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use crate::environment::environment::Environment;
 use crate::ir::ast::{
-    Expression, FormalArgument, FuncSignature, Function, Name, Statement, Type, ValueConstructor,
+    Expression, FormalArgument, FuncSignature, Function, Name, Pattern, Statement, Type,
+    ValueConstructor,
 };
 use crate::type_checker::expression_type_checker::check_expr;
 
@@ -24,8 +25,13 @@ pub fn check_stmt(
             branches,
             else_branch,
         } => check_if_chain_stmt(branches, else_branch, env),
-        // ADD PATTERN MATCHING: tratamento provisório até implementar a semântica.
-        Statement::Match { .. } => Err("Pattern matching is not implemented in the type checker yet".to_string()),
+        // ================================================================
+        // IMPLEMENTAÇÃO DO TYPE CHECKER DO MATCH
+        // Aqui começa o tratamento semântico de `match`: a expressão, os
+        // padrões e os corpos de cada caso são validados pelas funções
+        // `check_match_stmt` e `check_pattern` abaixo.
+        // ================================================================
+        Statement::Match { value, cases } => check_match_stmt(*value, cases, env),
         Statement::While(cond, stmt) => check_while_stmt(cond, stmt, env),
         Statement::For(var, expr, stmt) => check_for_stmt(var, expr, stmt, env),
         Statement::FuncDef(function) => check_func_def_stmt(function, env),
@@ -62,6 +68,235 @@ pub fn check_stmt(
             Ok(env.clone())
         }
     }
+}
+
+// ================================================================
+// TYPE CHECKER DO MATCH — FUNÇÃO PRINCIPAL
+// Checa cada caso em um ambiente isolado para impedir que variáveis
+// capturadas vazem para fora do match.
+// ================================================================
+fn check_match_stmt(
+    value: Expression,
+    cases: Vec<(Pattern, Box<Statement>)>,
+    env: &Environment<Type>,
+) -> Result<Environment<Type>, ErrorMessage> {
+    let value_type = check_expr(value, env)?;
+
+    if cases.is_empty() {
+        return Err("[Type Error] match must have at least one case.".to_string());
+    }
+
+    for (pattern, body) in cases {
+        let mut case_env = env.clone();
+        case_env.push();
+        let mut bindings = HashSet::new();
+        check_pattern(&pattern, &value_type, &mut case_env, &mut bindings)?;
+        check_stmt(*body, &case_env)?;
+    }
+
+    Ok(env.clone())
+}
+
+// ================================================================
+// TYPE CHECKER DO MATCH — VALIDAÇÃO RECURSIVA DOS PADRÕES
+// Valida literais, variáveis, curingas, tuplas, listas e construtores.
+// ================================================================
+fn check_pattern(
+    pattern: &Pattern,
+    expected_type: &Type,
+    env: &mut Environment<Type>,
+    bindings: &mut HashSet<Name>,
+) -> Result<(), ErrorMessage> {
+    match pattern {
+        Pattern::Literal(expr) => {
+            let pattern_type = check_expr(expr.clone(), env)?;
+            if types_compatible(expected_type, &pattern_type) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "[Type Error] pattern literal has type '{}', but match expression has type '{}'.",
+                    pattern_type, expected_type
+                ))
+            }
+        }
+        Pattern::Variable(name) => {
+            if !bindings.insert(name.clone()) {
+                return Err(format!(
+                    "[Type Error] pattern variable '{}' is bound more than once.",
+                    name
+                ));
+            }
+            env.map_variable(name.clone(), false, expected_type.clone());
+            Ok(())
+        }
+        Pattern::Wildcard => Ok(()),
+        Pattern::Tuple(patterns) => match expected_type {
+            Type::TTuple(types) => {
+                if patterns.len() != types.len() {
+                    return Err(format!(
+                        "[Type Error] tuple pattern expects {} elements, but match expression has {}.",
+                        patterns.len(), types.len()
+                    ));
+                }
+                for (pattern, element_type) in patterns.iter().zip(types.iter()) {
+                    check_pattern(pattern, element_type, env, bindings)?;
+                }
+                Ok(())
+            }
+            Type::TAny => {
+                for pattern in patterns {
+                    check_pattern(pattern, &Type::TAny, env, bindings)?;
+                }
+                Ok(())
+            }
+            other => Err(format!(
+                "[Type Error] tuple pattern cannot match value of type '{}'.",
+                other
+            )),
+        },
+        Pattern::List(patterns) => match expected_type {
+            Type::TList(element_type) => {
+                for pattern in patterns {
+                    check_pattern(pattern, element_type, env, bindings)?;
+                }
+                Ok(())
+            }
+            Type::TAny => {
+                for pattern in patterns {
+                    check_pattern(pattern, &Type::TAny, env, bindings)?;
+                }
+                Ok(())
+            }
+            other => Err(format!(
+                "[Type Error] list pattern cannot match value of type '{}'.",
+                other
+            )),
+        },
+        Pattern::Constructor(name, patterns) => {
+            check_constructor_pattern(name, patterns, expected_type, env, bindings)
+        }
+    }
+}
+
+// ================================================================
+// TYPE CHECKER DO MATCH — CONSTRUTORES
+// Valida construtores built-in (Just/Nothing/Ok/Err) e construtores de ADT.
+// ================================================================
+fn check_constructor_pattern(
+    name: &Name,
+    patterns: &[Pattern],
+    expected_type: &Type,
+    env: &mut Environment<Type>,
+    bindings: &mut HashSet<Name>,
+) -> Result<(), ErrorMessage> {
+    match name.as_str() {
+        "Just" => {
+            if patterns.len() != 1 {
+                return Err("[Type Error] Just pattern expects exactly one argument.".to_string());
+            }
+            let inner_type = match expected_type {
+                Type::TMaybe(inner) => inner.as_ref().clone(),
+                Type::TAny => Type::TAny,
+                other => {
+                    return Err(format!(
+                        "[Type Error] Just pattern cannot match value of type '{}'.",
+                        other
+                    ))
+                }
+            };
+            check_pattern(&patterns[0], &inner_type, env, bindings)
+        }
+        "Nothing" => {
+            if !patterns.is_empty() {
+                return Err("[Type Error] Nothing pattern cannot have arguments.".to_string());
+            }
+            if matches!(expected_type, Type::TMaybe(_) | Type::TAny) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "[Type Error] Nothing pattern cannot match value of type '{}'.",
+                    expected_type
+                ))
+            }
+        }
+        "Ok" | "Err" => {
+            if patterns.len() != 1 {
+                return Err(format!(
+                    "[Type Error] {} pattern expects exactly one argument.",
+                    name
+                ));
+            }
+            let inner_type = match expected_type {
+                Type::TResult(ok, _) if name == "Ok" => ok.as_ref().clone(),
+                Type::TResult(_, err) if name == "Err" => err.as_ref().clone(),
+                Type::TAny => Type::TAny,
+                other => {
+                    return Err(format!(
+                        "[Type Error] {} pattern cannot match value of type '{}'.",
+                        name, other
+                    ))
+                }
+            };
+            check_pattern(&patterns[0], &inner_type, env, bindings)
+        }
+        _ => {
+            let (adt_name, constructor) = find_constructor(name, env).ok_or_else(|| {
+                format!(
+                    "[Type Error] Constructor '{}' is not defined in any ADT.",
+                    name
+                )
+            })?;
+
+            if patterns.len() != constructor.types.len() {
+                return Err(format!(
+                    "[Type Error] constructor pattern '{}' expects {} arguments, but got {}.",
+                    name,
+                    constructor.types.len(),
+                    patterns.len()
+                ));
+            }
+
+            let belongs_to_adt = match expected_type {
+                Type::TAny => true,
+                Type::TAlgebraicData(type_name, _) => type_name == &adt_name,
+                _ => false,
+            };
+            if !belongs_to_adt {
+                return Err(format!(
+                    "[Type Error] constructor '{}' belongs to '{}', but match expression has type '{}'.",
+                    name, adt_name, expected_type
+                ));
+            }
+
+            for (pattern, argument_type) in patterns.iter().zip(constructor.types.iter()) {
+                check_pattern(pattern, argument_type, env, bindings)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn find_constructor(
+    name: &Name,
+    env: &Environment<Type>,
+) -> Option<(Name, ValueConstructor)> {
+    for scope in env.stack.iter() {
+        for (adt_name, constructors) in &scope.adts {
+            if let Some(constructor) = constructors.iter().find(|constructor| &constructor.name == name) {
+                return Some((adt_name.clone(), constructor.clone()));
+            }
+        }
+    }
+    for (adt_name, constructors) in &env.globals.adts {
+        if let Some(constructor) = constructors.iter().find(|constructor| &constructor.name == name) {
+            return Some((adt_name.clone(), constructor.clone()));
+        }
+    }
+    None
+}
+
+fn types_compatible(expected: &Type, found: &Type) -> bool {
+    expected == &Type::TAny || found == &Type::TAny || expected == found
 }
 
 pub fn check_block(
