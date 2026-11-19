@@ -1,8 +1,9 @@
 use super::expression_eval::{eval, ExpressionResult};
 use crate::environment::environment::Environment;
 use crate::environment::environment::TestResult;
-use crate::ir::ast::{Expression, Statement};
+use crate::ir::ast::{Expression, Pattern, Statement};
 use crate::stdlib::standard_library::get_metabuiltins_table;
+use std::collections::HashMap;
 
 pub enum Computation {
     Continue(Environment<Expression>),
@@ -360,6 +361,36 @@ pub fn execute(stmt: Statement, env: &Environment<Expression>) -> Result<Computa
             }
         }
 
+        // IMPLEMENTAÇÃO DO MATCH - INTERPRETADOR:
+        // avalia o valor, testa os casos em ordem e
+        // executa o corpo do primeiro padrão compatível.
+        Statement::Match { value, cases } => {
+            let matched_value = match eval(*value, &new_env)? {
+                ExpressionResult::Value(expr) => expr,
+                ExpressionResult::Propagate(expr) => {
+                    return Ok(Computation::PropagateError(expr, new_env))
+                }
+            };
+
+            for (pattern, body) in cases {
+                let mut bindings = HashMap::new();
+
+                if match_runtime_pattern(&pattern, &matched_value, &new_env, &mut bindings)? {
+                    let mut case_env = new_env.clone();
+                    case_env.push();
+
+                    for (name, captured_value) in bindings {
+                        case_env.map_variable(name, false, captured_value);
+                    }
+
+                    let computation = execute(*body, &case_env)?;
+                    return Ok(remove_match_scope(computation));
+                }
+            }
+
+            Err("No match case matched the value".to_string())
+        }
+
         Statement::Block(stmts) => {
             // new_env.push(); <- removing push()
             let result = execute_block(stmts, &new_env);
@@ -641,6 +672,147 @@ pub fn execute_if_block(
         }
     }
     Ok(Computation::Continue(current_env))
+}
+
+// IMPLEMENTAÇÃO DO MATCH - ESCOPO:
+// remove as capturas depois de executar o corpo do caso, sem remover
+// alterações feitas em variáveis que pertenciam ao ambiente externo.
+fn remove_match_scope(computation: Computation) -> Computation {
+    fn pop(mut env: Environment<Expression>) -> Environment<Expression> {
+        env.pop();
+        env
+    }
+
+    match computation {
+        Computation::Continue(env) => Computation::Continue(pop(env)),
+        Computation::Return(value, env) => Computation::Return(value, pop(env)),
+        Computation::PropagateError(value, env) => {
+            Computation::PropagateError(value, pop(env))
+        }
+        Computation::BreakLoop(env) => Computation::BreakLoop(pop(env)),
+        Computation::ContinueLoop(env) => Computation::ContinueLoop(pop(env)),
+    }
+}
+
+// IMPLEMENTAÇÃO DO MATCH - COMPARAÇÃO DE PADRÕES:
+// compara o padrão com o valor real e coleta as variáveis capturadas.
+fn match_runtime_pattern(
+    pattern: &Pattern,
+    value: &Expression,
+    env: &Environment<Expression>,
+    bindings: &mut HashMap<String, Expression>,
+) -> Result<bool, String> {
+    match pattern {
+        Pattern::Wildcard => Ok(true),
+        Pattern::Variable(name) => {
+            bindings.insert(name.clone(), value.clone());
+            Ok(true)
+        }
+        Pattern::Literal(expression) => {
+            let literal_value = match eval(expression.clone(), env)? {
+                ExpressionResult::Value(value) => value,
+                ExpressionResult::Propagate(_) => {
+                    return Err("A pattern literal não pode propagar erro".to_string())
+                }
+            };
+            Ok(runtime_values_equal(&literal_value, value))
+        }
+        Pattern::Tuple(patterns) => match value {
+            Expression::Tuple(values) if patterns.len() == values.len() => {
+                match_sequence(patterns, values, env, bindings)
+            }
+            _ => Ok(false),
+        },
+        Pattern::List(patterns) => match value {
+            Expression::ListValue(values) if patterns.len() == values.len() => {
+                match_sequence(patterns, values, env, bindings)
+            }
+            _ => Ok(false),
+        },
+        Pattern::Constructor(name, patterns) => {
+            let (actual_name, values) = constructor_value_parts(value);
+
+            if actual_name != Some(name.as_str()) || patterns.len() != values.len() {
+                return Ok(false);
+            }
+
+            match_sequence(patterns, &values, env, bindings)
+        }
+    }
+}
+
+// IMPLEMENTAÇÃO DO MATCH - PADRÕES COMPOSTOS:
+// verifica elementos de tuplas, listas e argumentos de construtores.
+fn match_sequence(
+    patterns: &[Pattern],
+    values: &[Expression],
+    env: &Environment<Expression>,
+    bindings: &mut HashMap<String, Expression>,
+) -> Result<bool, String> {
+    let previous_bindings = bindings.clone();
+
+    for (pattern, value) in patterns.iter().zip(values.iter()) {
+        if !match_runtime_pattern(pattern, value, env, bindings)? {
+            *bindings = previous_bindings;
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+// IMPLEMENTAÇÃO DO MATCH - CONSTRUTORES:
+// uniformiza ADTs, Just, Nothing, Ok e Err para a comparação.
+fn constructor_value_parts(value: &Expression) -> (Option<&str>, Vec<Expression>) {
+    match value {
+        Expression::Constructor(name, values) => (
+            Some(name.as_str()),
+            values.iter().map(|value| (**value).clone()).collect(),
+        ),
+        Expression::CJust(value) => (Some("Just"), vec![(**value).clone()]),
+        Expression::CNothing => (Some("Nothing"), Vec::new()),
+        Expression::COk(value) => (Some("Ok"), vec![(**value).clone()]),
+        Expression::CErr(value) => (Some("Err"), vec![(**value).clone()]),
+        _ => (None, Vec::new()),
+    }
+}
+
+// IMPLEMENTAÇÃO DO MATCH - IGUALDADE DE VALORES:
+// compara recursivamente literais, listas, tuplas e construtores.
+fn runtime_values_equal(left: &Expression, right: &Expression) -> bool {
+    match (left, right) {
+        (Expression::CTrue, Expression::CTrue)
+        | (Expression::CFalse, Expression::CFalse)
+        | (Expression::CVoid, Expression::CVoid)
+        | (Expression::CNothing, Expression::CNothing) => true,
+        (Expression::CInt(left), Expression::CInt(right)) => left == right,
+        (Expression::CReal(left), Expression::CReal(right)) => left == right,
+        (Expression::CInt(left), Expression::CReal(right)) => (*left as f64) == *right,
+        (Expression::CReal(left), Expression::CInt(right)) => *left == (*right as f64),
+        (Expression::CString(left), Expression::CString(right)) => left == right,
+        (Expression::CJust(left), Expression::CJust(right))
+        | (Expression::COk(left), Expression::COk(right))
+        | (Expression::CErr(left), Expression::CErr(right)) => {
+            runtime_values_equal(left, right)
+        }
+        (Expression::ListValue(left), Expression::ListValue(right))
+        | (Expression::Tuple(left), Expression::Tuple(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right.iter())
+                    .all(|(left, right)| runtime_values_equal(left, right))
+        }
+        (Expression::Constructor(left_name, left_values),
+         Expression::Constructor(right_name, right_values)) => {
+            left_name == right_name
+                && left_values.len() == right_values.len()
+                && left_values.iter().zip(right_values.iter()).all(|(left, right)| {
+                    runtime_values_equal(left, right)
+                })
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

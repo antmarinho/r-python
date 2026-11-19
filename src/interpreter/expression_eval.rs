@@ -36,6 +36,10 @@ pub fn eval(exp: Expression, env: &Environment<Expression>) -> Result<Expression
         Expression::FuncCall(name, args) => eval_function_call(name, args, env),
         Expression::ListValue(values) => eval_list_value(values, env),
         Expression::Tuple(values) => eval_tuple_value(values, env),
+        // IMPLEMENTAÇÃO DO MATCH - AVALIAÇÃO DE CONSTRUTORES:
+        // transforma os argumentos de um construtor em valores de runtime
+        // para que o interpretador possa compará-los com Pattern::Constructor.
+        Expression::Constructor(name, args) => eval_constructor_value(name, args, env),
         _ if is_constant(exp.clone()) => Ok(ExpressionResult::Value(exp)),
         _ => Err(String::from("Not implemented yet.")),
     }
@@ -1079,6 +1083,27 @@ fn eval_tuple_value(
         }
     }
     Ok(ExpressionResult::Value(Expression::Tuple(values)))
+}
+
+// IMPLEMENTAÇÃO DO MATCH - VALOR DE CONSTRUTOR:
+// avalia recursivamente os argumentos de Circle(...), Shape(...), etc.
+fn eval_constructor_value(
+    name: Name,
+    sub_expressions: Vec<Box<Expression>>,
+    env: &Environment<Expression>,
+) -> Result<ExpressionResult, String> {
+    let mut values = Vec::with_capacity(sub_expressions.len());
+
+    for expression in sub_expressions {
+        match eval(*expression, env)? {
+            ExpressionResult::Value(value) => values.push(Box::new(value)),
+            ExpressionResult::Propagate(value) => {
+                return Ok(ExpressionResult::Propagate(value))
+            }
+        }
+    }
+
+    Ok(ExpressionResult::Value(Expression::Constructor(name, values)))
 }
 
 #[cfg(test)]
